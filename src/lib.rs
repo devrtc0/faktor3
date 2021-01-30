@@ -1,21 +1,48 @@
 use std::{
-    env, error,
+    env, error, fmt,
     fs::File,
-    io::{BufRead, BufReader},
+    io::{self, BufRead, BufReader},
 };
 
-pub trait SetEnvVar {
-    fn set(&self, key: &str, value: Option<&str>) -> Result<(), Box<dyn error::Error>>;
+#[derive(Debug)]
+pub enum FaktorError {
+    Io(io::Error),
 }
 
-#[derive(Debug, Clone, Copy)]
+impl fmt::Display for FaktorError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FaktorError::Io(ref err) => write!(f, "IO error: {}", err),
+        }
+    }
+}
+
+impl error::Error for FaktorError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match self {
+            FaktorError::Io(err) => Some(err),
+        }
+    }
+}
+
+impl From<io::Error> for FaktorError {
+    fn from(err: io::Error) -> Self {
+        Self::Io(err)
+    }
+}
+
+pub trait SetEnvVar {
+    fn set(&self, key: &str, value: Option<&str>) -> Result<(), FaktorError>;
+}
+
+#[derive(Debug)]
 pub struct Override;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub struct Skip;
 
 impl SetEnvVar for Override {
-    fn set(&self, key: &str, value: Option<&str>) -> Result<(), Box<dyn error::Error>> {
+    fn set(&self, key: &str, value: Option<&str>) -> Result<(), FaktorError> {
         match value {
             Some("") | None => env::remove_var(key),
             Some(val) => env::set_var(key, val),
@@ -25,25 +52,24 @@ impl SetEnvVar for Override {
 }
 
 impl SetEnvVar for Skip {
-    fn set(&self, key: &str, value: Option<&str>) -> Result<(), Box<dyn error::Error>> {
+    fn set(&self, key: &str, value: Option<&str>) -> Result<(), FaktorError> {
         if let Some(value) = value {
-            match env::var(key) {
-                Err(env::VarError::NotPresent) => env::set_var(key, value),
-                _ => {}
+            if let Err(env::VarError::NotPresent) = env::var(key) {
+                env::set_var(key, value);
             }
         }
         Ok(())
     }
 }
 
-pub fn init<T>(mode: T) -> Result<(), Box<dyn error::Error>>
+pub fn init<T>(mode: T) -> Result<(), FaktorError>
 where
     T: SetEnvVar,
 {
     from_file(".env", mode)
 }
 
-pub fn from_file<T>(filename: &str, mode: T) -> Result<(), Box<dyn error::Error>>
+pub fn from_file<T>(filename: &str, mode: T) -> Result<(), FaktorError>
 where
     T: SetEnvVar,
 {
@@ -52,7 +78,7 @@ where
     init_inner(reader, mode)
 }
 
-fn init_inner<R, T>(reader: R, mode: T) -> Result<(), Box<dyn error::Error>>
+fn init_inner<R, T>(reader: R, mode: T) -> Result<(), FaktorError>
 where
     T: SetEnvVar,
     R: BufRead,
@@ -70,7 +96,7 @@ where
         if key.is_empty() {
             continue;
         }
-        mode.set(key, value).unwrap();
+        mode.set(key, value)?;
     }
     Ok(())
 }
@@ -84,9 +110,8 @@ fn split_once(in_string: &str) -> (&str, Option<&str>) {
 
 #[cfg(test)]
 mod tests {
-    use env::VarError;
-
     use crate::*;
+    use env::VarError;
 
     #[test]
     fn test_split_once_empty_string() {
@@ -167,5 +192,11 @@ mod tests {
         let res = init_inner(a, crate::Skip);
         assert_eq!(true, res.is_ok());
         assert_eq!("OLDTESTVALUE", env::var("TESTKEY").unwrap());
+    }
+
+    #[test]
+    fn test_error_impl() {
+        let err = FaktorError::Io(io::Error::new(io::ErrorKind::AddrInUse, "error"));
+        let _: Box<dyn error::Error> = Box::new(err);
     }
 }
