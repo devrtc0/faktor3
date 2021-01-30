@@ -1,0 +1,5 @@
+[package]
+name = "faktor3"
+version = "0.0.1"
+authors = ["HerrMAzik <herr.mazik@gmail.com>"]
+edition = "2018"
